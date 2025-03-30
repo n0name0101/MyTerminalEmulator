@@ -9,7 +9,7 @@ OBJDIR = obj
 # Daftar source dan target
 SRCS   = main.c GTKConsole.c MyPTY.c
 OBJS   = $(OBJDIR)/main.o $(OBJDIR)/GTKConsole.o $(OBJDIR)/MyPTY.o
-TARGET = a.out
+TARGET = MyTerminalEmulator
 
 # Target utama
 all: $(TARGET)
