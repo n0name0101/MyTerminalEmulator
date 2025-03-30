@@ -42,13 +42,13 @@
 int main(int argc, char* argv[]) {
     // Set up PTY
     const char* shell = "/bin/bash";
-    const char* login = "-bash";  // login name; adjust as needed
+
     PTY pty;
     Console console;
     gtk_init(&argc, &argv);
-    InitPTY(&pty,shell,login);
+    InitPTY(&pty,(char *)shell);
     InitConsole(&console, &pty);
-   
+
     if(pty.pid != 0) {
         gtk_widget_show_all(console.window);
         gtk_main();

@@ -14,4 +14,4 @@ typedef struct {
     pid_t pid;
 } PTY;
 
-void InitPTY(PTY* pty, const char* shell, const char* login);
+void InitPTY(PTY* pty, char* shell);

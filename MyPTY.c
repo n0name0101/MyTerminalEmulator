@@ -1,6 +1,6 @@
 #include "MyPTY.h"
 
-void InitPTY(PTY* pty, const char* shell, const char* login) {
+void InitPTY(PTY* pty, char* shell) {
     if (openpty(&pty->master, &pty->slave, NULL, NULL, NULL) == -1) {
         perror("openpty");
         exit(EXIT_FAILURE);
@@ -23,8 +23,11 @@ void InitPTY(PTY* pty, const char* shell, const char* login) {
         dup2(pty->slave, STDERR_FILENO);
         close(pty->master);
         close(pty->slave);
-        execl(shell, login, (char*)NULL);
-        perror("execl");
+
+        char *argv[] = { shell, NULL };
+        execvp(argv[0], argv);
+        /* Jika execvp gagal */
+        perror("execvp failed");
         exit(EXIT_FAILURE);
     }
 }

@@ -35,4 +35,4 @@ typedef struct {
 } Console;
 
 // Function Declaration
-void InitConsole(Console* console,PTY* pty);
+void InitConsole(Console* console, PTY* pty);
