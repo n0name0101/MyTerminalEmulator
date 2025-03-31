@@ -172,6 +172,21 @@ static inline void process_sgr(Console* console, const char* seq) {
     free(seq_copy);
 }
 
+static inline void process_scroll_region(Console* console, const char* seq) {
+    int top = 0, bottom = 0;
+    if (seq != NULL && strlen(seq) > 0) {
+        // Misal: "5;20" menghasilkan top = 5 dan bottom = 20 (1-based)
+        if (sscanf(seq, "%d;%d", &top, &bottom) == 2) {
+            // Simpan sebagai 0-based
+            console->scroll_top = (top > 0) ? top - 1 : 0;
+            console->scroll_bottom = (bottom > 0) ? bottom - 1 : 0;
+            g_print("Scroll region set to: top = %d, bottom = %d\n", console->scroll_top, console->scroll_bottom);
+        } else {
+            g_print("Invalid scroll region sequence: %s\n", seq);
+        }
+    }
+}
+
 /* Fungsi untuk memproses escape sequence erase line (ESC[K atau ESC[0K)
    Parameter 0 (atau kosong) berarti hapus dari kursor hingga akhir baris.
    Parameter 1 berarti hapus dari awal baris hingga kursor.

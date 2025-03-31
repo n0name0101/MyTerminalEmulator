@@ -57,6 +57,10 @@ int filter_escape_char(Console* console,char input) {
                 process_sgr(console, esc_buffer + 2);
                 printf("Color configuration\n");
             }
+            else if (esc_buffer[strlen(esc_buffer) - 1] == 'r') {                                             // Scrolling region
+                esc_buffer[strlen(esc_buffer) - 1] = '\0';
+                process_scroll_region(console, esc_buffer + 2);
+            }
             else if (esc_buffer[strlen(esc_buffer) - 1] == 'J') {                // Clear Screen
                 /* Misalnya, ESC[2J untuk clear screen */
                 process_clear(console, esc_buffer + 2);
@@ -201,18 +205,16 @@ static gboolean console_on_key_press(GtkWidget* widget, GdkEventKey* event, gpoi
     scroll_to_cursor(console);
 
     if (event->keyval == GDK_KEY_Left) {
-        if (console->x > 0)
-            console->x--;
-        return TRUE;
+        write(console->pty->master, "\33[D", 3);
     }
     else if (event->keyval == GDK_KEY_Right) {
-        console->x++;
+        write(console->pty->master, "\33[C", 3);
     }
     else if (event->keyval == GDK_KEY_Up) {
         write(console->pty->master, "\33[A", 3);
     }
     else if (event->keyval == GDK_KEY_Down) {
-        console->y++;
+        write(console->pty->master, "\33[B", 3);
     }
     else if ((event->state & GDK_CONTROL_MASK) && (event->keyval == GDK_KEY_c)) {
         write(console->pty->master, "\03", 1);
@@ -227,6 +229,21 @@ static gboolean console_on_key_press(GtkWidget* widget, GdkEventKey* event, gpoi
         }
     }
     return TRUE;
+}
+
+// Fungsi untuk melakukan scroll pada scroll region
+static void scroll_region(Console *console) {
+    GtkTextIter start_iter, end_iter;
+    // Dapatkan iterator pada awal baris scroll_top
+    gtk_text_buffer_get_iter_at_line(console->buffer, &start_iter, console->scroll_top);
+    // Dapatkan iterator pada awal baris berikutnya
+    gtk_text_buffer_get_iter_at_line(console->buffer, &end_iter, console->scroll_top + 1);
+    // Hapus baris pertama dalam region
+    gtk_text_buffer_delete(console->buffer, &start_iter, &end_iter);
+    g_print("Scroll region: deleting line at %d\n", console->scroll_top);
+    // Karena satu baris dihapus, sesuaikan posisi kursor jika berada di dalam region
+    if (console->y > console->scroll_top)
+        console->y--;
 }
 
 static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition, gpointer data) {
@@ -264,6 +281,17 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
                     console->y++;
                     console->x = 0;
 
+
+                    // Jika scroll region telah ditetapkan dan posisi kursor melewati batas bawah region,
+                    // lakukan scroll dengan menghapus baris di bagian atas region
+                    if (console->scroll_bottom > console->scroll_top && console->y > console->scroll_bottom) {
+                       scroll_region(console);
+                       gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+                       gtk_text_buffer_insert(console->buffer, &iter, " \n", -1);
+                       // Setelah scroll, pastikan baris baru telah ditambahkan di bagian bawah jika perlu.
+                       // Contoh: jika jumlah baris buffer kurang dari scroll_bottom, tambahkan baris kosong.
+                    }
+
                     //Check The Line First
                     int current_line_count = gtk_text_buffer_get_line_count(console->buffer);
                     if (current_line_count == console->y) {
@@ -289,9 +317,9 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
                     GtkTextIter end_iter = iter;
                     gtk_text_iter_forward_to_line_end(&end_iter);
 
-                    char *last_line = gtk_text_buffer_get_text(console->buffer, &iter, &end_iter, FALSE);
-                    g_print("Console Y = %d : Console X = %d : %s : Length=%ld \n",console->y, console->x,last_line,strlen(last_line));
-                    g_free(last_line);
+                    // char *last_line = gtk_text_buffer_get_text(console->buffer, &iter, &end_iter, FALSE);
+                    // g_print("Console Y = %d : Console X = %d : %s : Length=%ld \n",console->y, console->x,last_line,strlen(last_line));
+                    // g_free(last_line);
 
                     // Hapus karakter yang ada di posisi tersebut (jika ada)
                     if (!gtk_text_iter_equal(&iter,&end_iter)) {
@@ -299,9 +327,9 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
                         end_iter = iter;
                         gtk_text_iter_forward_char(&end_iter);
 
-                        char *last_line = gtk_text_buffer_get_text(console->buffer, &iter, &end_iter, FALSE);
-                        g_print("Insert : %c  , Delete Content : Hex: 0x%02X\n", input[0], last_line[0]);
-                        g_free(last_line);
+                        // char *last_line = gtk_text_buffer_get_text(console->buffer, &iter, &end_iter, FALSE);
+                        // g_print("Insert : %c  , Delete Content : Hex: 0x%02X\n", input[0], last_line[0]);
+                        // g_free(last_line);
 
                         gtk_text_buffer_delete(console->buffer, &iter, &end_iter);
                     }
@@ -354,6 +382,57 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
     return TRUE;
 }
 
+static void on_window_resize(GtkWidget *widget, GtkAllocation *allocation, gpointer user_data) {
+    Console *console = (Console *)user_data;
+
+    // Dapatkan allocation dari text_view
+    GtkAllocation tv_alloc;
+    gtk_widget_get_allocation(console->text_view, &tv_alloc);
+    int tv_width = tv_alloc.width;
+    int tv_height = tv_alloc.height;
+
+    // Buat layout Pango untuk mengukur ukuran karakter dari text_view.
+    PangoLayout *layout = gtk_widget_create_pango_layout(console->text_view, "M");
+    if (!layout) {
+        return;  // Jika gagal membuat layout, keluar saja
+    }
+
+    int char_width, char_height;
+    pango_layout_get_pixel_size(layout, &char_width, &char_height);
+    g_object_unref(layout);
+
+    if (char_width > 0)
+        console->console_max_cols = tv_width / char_width;
+
+    if (char_height > 0)
+        console->console_max_rows = tv_height / char_height;
+
+    // g_print("Max cols = %d, max rows = %d\n", console->console_max_cols, console->console_max_rows);
+
+    // Variabel static untuk menyimpan nilai sebelumnya agar ioctl hanya dipanggil saat terjadi perubahan
+    static int prev_cols = 0;
+    static int prev_rows = 0;
+
+    // Hanya lakukan ioctl jika nilai kolom atau baris telah berubah
+    if (console->console_max_cols != prev_cols || console->console_max_rows != prev_rows) {
+        struct winsize ws;
+        ws.ws_col = console->console_max_cols;
+        ws.ws_row = console->console_max_rows;
+        ws.ws_xpixel = 0;
+        ws.ws_ypixel = 0;
+
+        if (ioctl(console->pty->master, TIOCSWINSZ, &ws) == -1) {
+            perror("ioctl TIOCSWINSZ");
+        } else {
+            g_print("PTY size updated: cols = %d, rows = %d\n", ws.ws_col, ws.ws_row);
+        }
+
+        // Update nilai sebelumnya
+        prev_cols = console->console_max_cols;
+        prev_rows = console->console_max_rows;
+    }
+}
+
 /* Inisialisasi struktur Console: membuat widget, mengatur teks awal, kursor tetap,
    menghubungkan event handler, dan inisialisasi hash table untuk tag. */
 void InitConsole(Console* console, PTY* pty) {
@@ -393,6 +472,9 @@ void InitConsole(Console* console, PTY* pty) {
 
     console->y = 0;
     console->x = 0;
+
+    // Sambungkan signal "size-allocate" untuk memonitor perubahan ukuran window
+    g_signal_connect(console->window, "size-allocate", G_CALLBACK(on_window_resize), console);
 
     g_signal_connect(console->text_view, "key-press-event", G_CALLBACK(console_on_key_press), console);
     //g_timeout_add(50, pty_reader, console);

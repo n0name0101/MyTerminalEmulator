@@ -28,4 +28,3 @@ $(OBJDIR)/%.o: %.c
 # Membersihkan file objek dan executable
 clean:
 	@rm -f $(OBJS) $(TARGET)
-	@echo "Clean complete."
