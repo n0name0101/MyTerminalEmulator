@@ -53,44 +53,7 @@ int filter_escape_char(Console* console,char input) {
 
             printf("\nDetected CSI: ");
             esc_buffer[esc_index] = '\0';
-            if (esc_buffer[strlen(esc_buffer) - 1] == 'm') {                     // Warna
-                process_sgr(console, esc_buffer + 2);
-                printf("Color configuration\n");
-            }
-            else if (esc_buffer[strlen(esc_buffer) - 1] == 'r') {                                             // Scrolling region
-                esc_buffer[strlen(esc_buffer) - 1] = '\0';
-                process_scroll_region(console, esc_buffer + 2);
-            }
-            else if (esc_buffer[strlen(esc_buffer) - 1] == 'J') {                // Clear Screen
-                /* Misalnya, ESC[2J untuk clear screen */
-                process_clear(console, esc_buffer + 2);
-            }
-            else if (esc_buffer[strlen(esc_buffer) - 1]  == 'C') {               // Move cursor ke kanan
-                // Menangani cursor forward: ESC[<n>C
-                esc_buffer[strlen(esc_buffer) - 1] = '\0';
-                process_cursor_forward(console, esc_buffer + 2);
-            }
-            else if (esc_buffer[strlen(esc_buffer) - 1] == 'K') {                // Menghapus line dengan beberapa mode
-                // Proses erase line: ESC[K atau ESC[0K
-                esc_buffer[strlen(esc_buffer) - 1] = '\0';
-                process_erase_line(console, esc_buffer + 2);
-            }
-            else if (esc_buffer[strlen(esc_buffer) - 1] == 'H') {                // Mengubah Posisi Cursor
-                // Menangani cursor position: ESC[<baris>;<kolom>H
-                esc_buffer[strlen(esc_buffer) - 1] = '\0';
-                process_cursor_position(console, esc_buffer + 2);
-            }
-            else if (esc_buffer[2] == '?') {
-                char param[32];
-                int param_index = 0;
-                int i = 3;
-                while (!isalpha(esc_buffer[i]) && param_index < (int)sizeof(param) - 1) {
-                   param[param_index++] = esc_buffer[i++];
-                }
-                param[param_index] = '\0';
-                char mode = esc_buffer[i];  /* Biasanya 'h' atau 'l' */
-                process_private_mode(console, param, mode);
-            }
+            CSIProcessing(console, esc_buffer);                            // Control Sequence Introducer Processing
 
             state = STATE_NORMAL;
             esc_index = 0;
@@ -202,8 +165,6 @@ void scroll_to_cursor(Console* console) {
 static gboolean console_on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer user_data) {
     Console* console = (Console*)user_data;
 
-    scroll_to_cursor(console);
-
     if (event->keyval == GDK_KEY_Left) {
         write(console->pty->master, "\33[D", 3);
     }
@@ -228,6 +189,7 @@ static gboolean console_on_key_press(GtkWidget* widget, GdkEventKey* event, gpoi
             write(console->pty->master, &(event->string[i]), 1);
         }
     }
+    scroll_to_cursor(console);
     return TRUE;
 }
 
@@ -281,10 +243,11 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
                     console->y++;
                     console->x = 0;
 
-
                     // Jika scroll region telah ditetapkan dan posisi kursor melewati batas bawah region,
                     // lakukan scroll dengan menghapus baris di bagian atas region
-                    if (console->scroll_bottom > console->scroll_top && console->y > console->scroll_bottom) {
+                    // (console->scroll_bottom < (console->console_max_rows-1) || console->scroll_top > 0)
+                    if (console->scroll_bottom > console->scroll_top && console->y > console->scroll_bottom    \
+                        && (console->scroll_bottom < (console->console_max_rows-1) || console->scroll_top > 0) ) {
                        scroll_region(console);
                        gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
                        gtk_text_buffer_insert(console->buffer, &iter, " \n", -1);
@@ -297,7 +260,7 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
                     if (current_line_count == console->y) {
                         GtkTextIter end_iter;
                         gtk_text_buffer_get_end_iter(console->buffer, &end_iter);
-                        gtk_text_buffer_insert(console->buffer, &end_iter, "\n", -1);
+                        gtk_text_buffer_insert(console->buffer, &end_iter, " \n", -1);
                     }
                     gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
                 }
@@ -430,6 +393,8 @@ static void on_window_resize(GtkWidget *widget, GtkAllocation *allocation, gpoin
         // Update nilai sebelumnya
         prev_cols = console->console_max_cols;
         prev_rows = console->console_max_rows;
+        console->scroll_top = 0;
+        console->scroll_bottom = console->console_max_rows-1;
     }
 }
 

@@ -1,5 +1,94 @@
 #include "GTKConsole.h"
 
+static inline void process_osc(Console* console, const char* osc);
+static inline void process_private_mode(Console* console, const char* param, char mode);
+static inline void process_clear(Console* console, const char* seq);
+static inline void process_cursor_position(Console* console, const char* seq);
+static inline void process_cursor_forward(Console* console, const char* seq);
+static inline void process_sgr(Console* console, const char* seq);
+static inline void process_scroll_region(Console* console, const char* seq);
+static inline void process_erase_line(Console* console, const char* seq);
+static inline void process_dsr(Console* console, const char* seq);
+static inline void process_insert_line(Console* console, const char* seq);
+
+static inline void CSIProcessing(Console* console, char *CSIsequence) {
+   size_t len = strlen(CSIsequence);
+   char final = CSIsequence[len - 1];
+   if (final == 'm') {                     // Warna
+      process_sgr(console, CSIsequence + 2);
+      printf("Color configuration\n");
+   }
+   else if (final == 'r') {                // Scrolling region
+      CSIsequence[len - 1] = '\0';
+      process_scroll_region(console, CSIsequence + 2);
+   }
+   else if (final == 'J') {                // Clear Screen
+      process_clear(console, CSIsequence + 2);
+   }
+   else if (final == 'C') {                // Move cursor ke kanan
+      CSIsequence[len - 1] = '\0';
+      process_cursor_forward(console, CSIsequence + 2);
+   }
+   else if (final == 'K') {                // Erase line
+      CSIsequence[len - 1] = '\0';
+      process_erase_line(console, CSIsequence + 2);
+   }
+   else if (final == 'H') {                // Cursor position
+      CSIsequence[len - 1] = '\0';
+      process_cursor_position(console, CSIsequence + 2);
+   }
+   else if (final == 'n') {                // Device Status Report (DSR)
+      CSIsequence[len - 1] = '\0';
+      process_dsr(console, CSIsequence + 2);
+   }
+   else if (final == 'L') {                // Insert line(s)
+      CSIsequence[len - 1] = '\0';
+      process_insert_line(console, CSIsequence + 2);
+   }
+   else if (CSIsequence[2] == '?') {
+      char param[32];
+      int param_index = 0;
+      int i = 3;
+      while (!isalpha(CSIsequence[i]) && param_index < (int)sizeof(param) - 1) {
+          param[param_index++] = CSIsequence[i++];
+      }
+      param[param_index] = '\0';
+      char mode = CSIsequence[i];  /* Biasanya 'h' atau 'l' */
+      process_private_mode(console, param, mode);
+   }
+}
+
+/* Fungsi untuk memproses escape sequence insert line (ESC[<n>L)
+   Fungsi ini akan menyisipkan n baris kosong pada posisi baris saat ini.
+   Jika parameter kosong, defaultnya adalah 1 baris. */
+static inline void process_insert_line(Console* console, const char* seq) {
+    int n = 1;  // Default: insert 1 line
+    if (seq != NULL && strlen(seq) > 0) {
+        n = atoi(seq);
+        if (n <= 0) {
+            n = 1;
+        }
+    }
+    // Lakukan penyisipan n baris kosong di posisi kursor.
+    for (int i = 0; i < n; i++) {
+        GtkTextIter iter;
+        GtkTextIter start_iter, end_iter;
+        // Hapus baris terakhir
+        // Dapatkan iterator pada awal baris scroll_top
+        gtk_text_buffer_get_iter_at_line(console->buffer, &start_iter, console->scroll_bottom);
+        // Dapatkan iterator pada awal baris berikutnya
+        gtk_text_buffer_get_iter_at_line(console->buffer, &end_iter, console->scroll_bottom + 1);
+        // Hapus baris pertama dalam region
+        gtk_text_buffer_delete(console->buffer, &start_iter, &end_iter);
+
+        // Dapatkan iterator pada awal baris saat ini
+        gtk_text_buffer_get_iter_at_line(console->buffer, &iter, console->y);
+        // Sisipkan newline, yang akan mendorong baris di bawah ke bawah.
+        gtk_text_buffer_insert(console->buffer, &iter, " \n", -1);
+    }
+    g_print("Inserted %d line(s) at row %d.\n", n, console->y);
+}
+
 /* Fungsi untuk memproses escape sequence OSC (Operating System Command).
    Contoh format: ESC ] 0 ; <judul> BEL atau ESC ] 0 ; <judul> ESC \ */
 static inline void process_osc(Console* console, const char* osc) {
@@ -26,6 +115,38 @@ static inline void process_private_mode(Console* console, const char* param, cha
     }
     else {
         g_print("Private mode %s%c not implemented\n", param, mode);
+    }
+}
+
+/* Fungsi untuk memproses escape sequence DSR (Device Status Report)
+   Escape sequence ini dapat berupa:
+   - ESC[6n: Meminta laporan posisi kursor.
+   - ESC[5n: Meminta laporan status terminal (umumnya respon OK adalah ESC[0n).
+
+   Parameter 'seq' berisi karakter di antara '[' dan 'n'. */
+static inline void process_dsr(Console* console, const char* seq) {
+    if (strcmp(seq, "6") == 0) {
+        // ESC[6n: Laporan posisi kursor.
+        int row = console->y + 1;  // Konversi ke 1-based
+        int col = console->x + 1;  // Konversi ke 1-based
+        char response[64];
+        snprintf(response, sizeof(response), "\33[%d;%dR", row, col);
+        write(console->pty->master, response, strlen(response));
+        g_print("Cursor position reported: ");
+        for (int i = 0; i < strlen(response); i++) {
+           g_print("%02X ", (unsigned char)response[i]);
+        }
+        g_print("\n");
+    }
+    else if (strcmp(seq, "5") == 0) {
+        // ESC[5n: Laporan status terminal.
+        // Biasanya terminal merespons dengan ESC[0n untuk status OK.
+        char response[] = "\33[0n";
+        write(console->pty->master, response, strlen(response));
+        g_print("Terminal status reported: %s\n", response);
+    }
+    else {
+        g_print("Unknown DSR sequence: %s\n", seq);
     }
 }
 
@@ -58,35 +179,40 @@ static inline void process_cursor_position(Console* console, const char* seq) {
             console->y = (row > 0) ? row - 1 : 0;
             console->x = (col > 0) ? col - 1 : 0;
             g_print("Cursor moved to row %d, column %d\n", console->y, console->x);
-
-            //Make sure the line in buffer is ready to use
-            while (gtk_text_buffer_get_line_count(console->buffer) <= console->y) {
-                GtkTextIter end_iter;
-                gtk_text_buffer_get_end_iter(console->buffer, &end_iter);
-                gtk_text_buffer_insert(console->buffer, &end_iter, "\n", -1);
-            }
-
-            // Pastikan kolom (console->x) sudah ada pada baris yang dituju
-            GtkTextIter line_start, line_end;
-            gtk_text_buffer_get_iter_at_line(console->buffer, &line_start, console->y);
-            line_end = line_start;
-            gtk_text_iter_forward_to_line_end(&line_end);
-
-            // Hitung panjang baris saat ini
-            gchar *line_text = gtk_text_buffer_get_text(console->buffer, &line_start, &line_end, FALSE);
-            int line_length = strlen(line_text);
-            g_free(line_text);
-
-            // Jika panjang baris kurang dari posisi kolom yang diinginkan,
-            // langsung sisipkan spasi satu per satu
-            while (line_length <= console->x) {
-                gtk_text_buffer_insert(console->buffer, &line_end, " ", -1);
-                line_length++;
-            }
         }
         else {
             g_print("Invalid cursor position sequence: %s\n", seq);
         }
+
+        //Make sure the line in buffer is ready to use
+        while (gtk_text_buffer_get_line_count(console->buffer) <= console->y) {
+            GtkTextIter end_iter;
+            gtk_text_buffer_get_end_iter(console->buffer, &end_iter);
+            gtk_text_buffer_insert(console->buffer, &end_iter, " \n", -1);
+        }
+    }
+    else if(seq != NULL && strlen(seq) == 0) {
+        console->y = 0;
+        console->x = 0;
+        g_print("Cursor moved to row %d, column %d\n", console->y, console->x);
+    }
+
+    // Pastikan kolom (console->x) sudah ada pada baris yang dituju
+    GtkTextIter line_start, line_end;
+    gtk_text_buffer_get_iter_at_line(console->buffer, &line_start, console->y);
+    line_end = line_start;
+    gtk_text_iter_forward_to_line_end(&line_end);
+
+    // Hitung panjang baris saat ini
+    gchar *line_text = gtk_text_buffer_get_text(console->buffer, &line_start, &line_end, FALSE);
+    int line_length = strlen(line_text);
+    g_free(line_text);
+
+    // Jika panjang baris kurang dari posisi kolom yang diinginkan,
+    // langsung sisipkan spasi satu per satu
+    while (line_length <= console->x) {
+       gtk_text_buffer_insert(console->buffer, &line_end, " ", -1);
+       line_length++;
     }
 }
 
