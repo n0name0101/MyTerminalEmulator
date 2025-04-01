@@ -6,10 +6,22 @@ typedef enum {
     STATE_ESC,       // Sudah terdeteksi ESC (0x1b)
     STATE_CSI,       // Dalam CSI (ESC + '[')
     STATE_OSC,       // Dalam OSC (ESC + ']')
-    STATE_OSC_ESC    // Dalam OSC, sudah terdeteksi ESC sebagai potensi awal ST
+    STATE_OSC_ESC,   // Dalam OSC, sudah terdeteksi ESC sebagai potensi awal ST
+    STATE_ESC_CHARSET // Untuk menangani escape sequence seperti ESC(B
 } State;
 
-int filter_escape_char(Console* console,char input) {
+// Fungsi baru untuk memproses escape sequence karakter set (misal ESC(B)
+static inline void process_charset(Console* console, const char* seq) {
+    // Untuk contoh ini, kita hanya menangani ESC(B) yang berarti set US-ASCII.
+    if (strcmp(seq, "B") == 0) {
+        g_print("Charset set to US-ASCII (G0) via ESC(B\n");
+        // Jika diperlukan, tambahkan logika untuk mengubah mode karakter pada console.
+    } else {
+        g_print("Unknown charset escape sequence: ESC(%s\n", seq);
+    }
+}
+
+int filter_escape_char(Console* console, char input) {
     // Buffer untuk menyimpan escape sequence yang sedang dibangun
     static char esc_buffer[256];
     static int esc_index = 0;
@@ -40,21 +52,33 @@ int filter_escape_char(Console* console,char input) {
             state = STATE_OSC;
             return -1;
         }
+        else if (input == '(') {
+            // Mulai escape sequence untuk pemilihan charset, misal ESC(...
+            state = STATE_ESC_CHARSET;
+            esc_index = 0; // Reset buffer khusus untuk charset
+            return -1;
+        }
         else {
             state = STATE_NORMAL;
             return input;
         }
 
+    case STATE_ESC_CHARSET:
+        // Escape sequence untuk charset biasanya hanya satu karakter (misal 'B')
+        esc_buffer[esc_index++] = input;
+        esc_buffer[esc_index] = '\0';
+        process_charset(console, esc_buffer);
+        state = STATE_NORMAL;
+        esc_index = 0;
+        return -1;
+
     case STATE_CSI:
         esc_buffer[esc_index++] = input;
         // Dalam CSI, sequence berakhir jika karakter final berada di rentang 0x40 sampai 0x7E
         if (input >= 0x40 && input <= 0x7E) {
-            // CSI sequence selesai, cetak escape sequence yang terdeteksi
-
             printf("\nDetected CSI: ");
             esc_buffer[esc_index] = '\0';
-            CSIProcessing(console, esc_buffer);                            // Control Sequence Introducer Processing
-
+            CSIProcessing(console, esc_buffer); // Proses CSI sequence
             state = STATE_NORMAL;
             esc_index = 0;
         }
@@ -64,11 +88,9 @@ int filter_escape_char(Console* console,char input) {
         esc_buffer[esc_index++] = input;
         // Dalam OSC, sequence berakhir jika menemukan BEL (0x07) atau ST (ESC + '\\')
         if (input == 0x07) {
-
             printf("\nDetected OSC: ");
             esc_buffer[--esc_index] = '\0';
-            process_osc(console, esc_buffer+2);
-
+            process_osc(console, esc_buffer + 2);
             state = STATE_NORMAL;
             esc_index = 0;
         }
@@ -81,7 +103,6 @@ int filter_escape_char(Console* console,char input) {
     case STATE_OSC_ESC:
         esc_buffer[esc_index++] = input;
         if (input == '\\') {
-            // OSC sequence selesai (ditemukan ST)
             printf("\nDetected OSC: ");
             for (int i = 0; i < esc_index; i++) {
                 putchar(esc_buffer[i]);
@@ -91,7 +112,6 @@ int filter_escape_char(Console* console,char input) {
             esc_index = 0;
         }
         else {
-            // Jika bukan '\\', kembali ke state OSC
             state = STATE_OSC;
         }
         return -1;
@@ -193,19 +213,17 @@ static gboolean console_on_key_press(GtkWidget* widget, GdkEventKey* event, gpoi
     return TRUE;
 }
 
-// Fungsi untuk melakukan scroll pada scroll region
-static void scroll_region(Console *console) {
-    GtkTextIter start_iter, end_iter;
-    // Dapatkan iterator pada awal baris scroll_top
-    gtk_text_buffer_get_iter_at_line(console->buffer, &start_iter, console->scroll_top);
-    // Dapatkan iterator pada awal baris berikutnya
-    gtk_text_buffer_get_iter_at_line(console->buffer, &end_iter, console->scroll_top + 1);
-    // Hapus baris pertama dalam region
-    gtk_text_buffer_delete(console->buffer, &start_iter, &end_iter);
-    g_print("Scroll region: deleting line at %d\n", console->scroll_top);
-    // Karena satu baris dihapus, sesuaikan posisi kursor jika berada di dalam region
-    if (console->y > console->scroll_top)
-        console->y--;
+void delete_with_cursor_position(Console *console) {
+      GtkTextIter iter, end_iter;
+      gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+      end_iter = iter;
+      gtk_text_iter_forward_char(&end_iter);
+
+      // char *last_line = gtk_text_buffer_get_text(console->buffer, &iter, &end_iter, FALSE);
+      // g_print("Insert : %c  , Delete Content : Hex: 0x%02X\n", input[0], last_line[0]);
+      // g_free(last_line);
+
+      gtk_text_buffer_delete(console->buffer, &iter, &end_iter);
 }
 
 static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition, gpointer data) {
@@ -232,10 +250,11 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
                      gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
                      continue;
                 }
-                else if (buf[i] == 0x08) {
+                else if (buf[i] == 0x08) {                                          // Backspace
                     console->x--;
-                    g_print("Backspace \n");
-
+                    if(console->x < 0) {
+                       console->x = 0;
+                    }
                     // Update iter
                     gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
                 }
@@ -248,9 +267,8 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
                     // (console->scroll_bottom < (console->console_max_rows-1) || console->scroll_top > 0)
                     if (console->scroll_bottom > console->scroll_top && console->y > console->scroll_bottom    \
                         && (console->scroll_bottom < (console->console_max_rows-1) || console->scroll_top > 0) ) {
-                       scroll_region(console);
-                       gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
-                       gtk_text_buffer_insert(console->buffer, &iter, " \n", -1);
+                       scroll_region(console, console->scroll_top, console->scroll_bottom);
+                       console->y--;
                        // Setelah scroll, pastikan baris baru telah ditambahkan di bagian bawah jika perlu.
                        // Contoh: jika jumlah baris buffer kurang dari scroll_bottom, tambahkan baris kosong.
                     }
@@ -270,36 +288,36 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
                 }
                 else if (isprint(buf[i])) {
                     char input[2] = { buf[i], '\0' };
+                    if (console->x == console->console_max_cols) {
+                       console->x = 0;
+                       console->y++;
+                       //Check The Line First
+                       int current_line_count = gtk_text_buffer_get_line_count(console->buffer);
+                       if (current_line_count == console->y) {
+                           GtkTextIter end_iter;
+                           gtk_text_buffer_get_end_iter(console->buffer, &end_iter);
+                           gtk_text_buffer_insert(console->buffer, &end_iter, " \n", -1);
+                       }
+                       gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+                    }
 
                     // Insert Mode
                     // GtkTextTag* tag = get_current_tag(console);
                     // gtk_text_buffer_insert_with_tags(console->buffer, &iter, input, -1, tag, NULL);
 
                     // Replace mode
-                    gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
-                    GtkTextIter end_iter = iter;
-                    gtk_text_iter_forward_to_line_end(&end_iter);
+                    GtkTextIter iter;
+                    gtk_text_buffer_get_iter_at_line(console->buffer, &iter, console->y);
 
                     // char *last_line = gtk_text_buffer_get_text(console->buffer, &iter, &end_iter, FALSE);
                     // g_print("Console Y = %d : Console X = %d : %s : Length=%ld \n",console->y, console->x,last_line,strlen(last_line));
                     // g_free(last_line);
 
                     // Hapus karakter yang ada di posisi tersebut (jika ada)
-                    if (!gtk_text_iter_equal(&iter,&end_iter)) {
-                        gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
-                        end_iter = iter;
-                        gtk_text_iter_forward_char(&end_iter);
-
-                        // char *last_line = gtk_text_buffer_get_text(console->buffer, &iter, &end_iter, FALSE);
-                        // g_print("Insert : %c  , Delete Content : Hex: 0x%02X\n", input[0], last_line[0]);
-                        // g_free(last_line);
-
-                        gtk_text_buffer_delete(console->buffer, &iter, &end_iter);
-                    }
+                    if (gtk_text_iter_ends_line(&iter) == FALSE)
+                        delete_with_cursor_position(console);
 
                     gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
-                    end_iter = iter;
-
                     // Sisipkan karakter baru dengan tag yang sesuai
                     GtkTextTag* tag = get_current_tag(console);
                     gtk_text_buffer_insert_with_tags(console->buffer, &iter, input, -1, tag, NULL);

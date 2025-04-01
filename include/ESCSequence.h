@@ -4,58 +4,123 @@ static inline void process_osc(Console* console, const char* osc);
 static inline void process_private_mode(Console* console, const char* param, char mode);
 static inline void process_clear(Console* console, const char* seq);
 static inline void process_cursor_position(Console* console, const char* seq);
-static inline void process_cursor_forward(Console* console, const char* seq);
+static inline void process_cursor_right(Console* console, const char* seq);
+static inline void process_cursor_up(Console* console, const char* seq);
 static inline void process_sgr(Console* console, const char* seq);
 static inline void process_scroll_region(Console* console, const char* seq);
 static inline void process_erase_line(Console* console, const char* seq);
 static inline void process_dsr(Console* console, const char* seq);
 static inline void process_insert_line(Console* console, const char* seq);
+static inline void scroll_region(Console *console, int scroll_top, int scroll_bottom);
+static inline void process_reverse_index(Console* console, const char* seq);
+static inline void process_delete(Console* console, const char* seq);
 
 static inline void CSIProcessing(Console* console, char *CSIsequence) {
-   size_t len = strlen(CSIsequence);
-   char final = CSIsequence[len - 1];
-   if (final == 'm') {                     // Warna
-      process_sgr(console, CSIsequence + 2);
-      printf("Color configuration\n");
-   }
-   else if (final == 'r') {                // Scrolling region
-      CSIsequence[len - 1] = '\0';
-      process_scroll_region(console, CSIsequence + 2);
-   }
-   else if (final == 'J') {                // Clear Screen
-      process_clear(console, CSIsequence + 2);
-   }
-   else if (final == 'C') {                // Move cursor ke kanan
-      CSIsequence[len - 1] = '\0';
-      process_cursor_forward(console, CSIsequence + 2);
-   }
-   else if (final == 'K') {                // Erase line
-      CSIsequence[len - 1] = '\0';
-      process_erase_line(console, CSIsequence + 2);
-   }
-   else if (final == 'H') {                // Cursor position
-      CSIsequence[len - 1] = '\0';
-      process_cursor_position(console, CSIsequence + 2);
-   }
-   else if (final == 'n') {                // Device Status Report (DSR)
-      CSIsequence[len - 1] = '\0';
-      process_dsr(console, CSIsequence + 2);
-   }
-   else if (final == 'L') {                // Insert line(s)
-      CSIsequence[len - 1] = '\0';
-      process_insert_line(console, CSIsequence + 2);
-   }
-   else if (CSIsequence[2] == '?') {
-      char param[32];
-      int param_index = 0;
-      int i = 3;
-      while (!isalpha(CSIsequence[i]) && param_index < (int)sizeof(param) - 1) {
-          param[param_index++] = CSIsequence[i++];
-      }
-      param[param_index] = '\0';
-      char mode = CSIsequence[i];  /* Biasanya 'h' atau 'l' */
-      process_private_mode(console, param, mode);
-   }
+    size_t len = strlen(CSIsequence);
+    char final = CSIsequence[len - 1];
+    // Hapus karakter final dari sequence untuk parsing parameter
+    CSIsequence[len - 1] = '\0';
+
+    switch (final) {
+        case 'm':  // Warna
+            process_sgr(console, CSIsequence + 2);
+            printf("Color configuration\n");
+            break;
+        case 'r':  // Scrolling region
+            process_scroll_region(console, CSIsequence + 2);
+            break;
+        case 'M':  // Reverse index: ESC[...M
+            process_reverse_index(console, CSIsequence + 2);
+            break;
+        case 'P':  // Delete: ESC[...P
+            process_delete(console, CSIsequence + 2);
+            break;
+        case 'J':  // Clear Screen
+            process_clear(console, CSIsequence + 2);
+            break;
+        case 'C':  // Move cursor ke kanan
+            process_cursor_right(console, CSIsequence + 2);
+            break;
+        case 'A':  // Move cursor ke atas
+            process_cursor_up(console, CSIsequence + 2);
+            break;
+        case 'K':  // Erase line
+            process_erase_line(console, CSIsequence + 2);
+            break;
+        case 'H':  // Cursor position
+            process_cursor_position(console, CSIsequence + 2);
+            break;
+        case 'n':  // Device Status Report (DSR)
+            process_dsr(console, CSIsequence + 2);
+            break;
+        case 'L':  // Insert line(s)
+            process_insert_line(console, CSIsequence + 2);
+            break;
+        default:
+            // Jika karakter kedua adalah '?' berarti mode privat
+            if (CSIsequence[2] == '?') {
+                char param[32];
+                int param_index = 0;
+                int i = 3;
+                while (!isalpha(CSIsequence[i]) && param_index < (int)sizeof(param) - 1) {
+                    param[param_index++] = CSIsequence[i++];
+                }
+                param[param_index] = '\0';
+                char mode = CSIsequence[i];  // Biasanya 'h' atau 'l'
+                process_private_mode(console, param, mode);
+            }
+            else
+                g_print("Unknown CSI sequence: %s%c\n", CSIsequence, final);
+            break;
+    }
+}
+
+static inline void process_reverse_index(Console* console, const char* seq) {
+    int n = 1;  // Default: scroll 1 baris
+    if (strlen(seq) > 0) {
+        n = atoi(seq);
+        if (n <= 0) {
+            n = 1;
+        }
+    }
+    // Lakukan scroll sebanyak n baris dengan menggunakan nilai current y sebagai scroll_top
+    for (int i = 0; i < n; i++) {
+        scroll_region(console, console->y, console->scroll_bottom);
+    }
+    g_print("Scroll region executed for %d line(s) via ESC[...M\n", n);
+}
+
+// Fungsi untuk memproses escape sequence delete (ESC[...P)
+// Menggunakan atoi untuk menentukan jumlah karakter yang dihapus.
+static inline void process_delete(Console* console, const char* seq) {
+    int n = 1;  // Default: hapus 1 karakter
+    if (seq != NULL && strlen(seq) > 0) {
+        n = atoi(seq);
+        if (n <= 0) {
+            n = 1;
+        }
+    }
+    // Lakukan delete sebanyak n karakter dengan menggunakan delete_with_cursor_position(console)
+    for (int i = 0; i < n; i++) {
+        delete_with_cursor_position(console);
+    }
+    g_print("Delete executed: %d character(s) deleted via ESC[...P\n", n);
+}
+
+// Fungsi untuk melakukan scroll pada scroll region
+static inline void scroll_region(Console *console, int scroll_top, int scroll_bottom) {
+    GtkTextIter start_iter, end_iter;
+    // Dapatkan iterator pada awal baris scroll_top
+    gtk_text_buffer_get_iter_at_line(console->buffer, &start_iter, scroll_top);
+    // Dapatkan iterator pada awal baris berikutnya
+    gtk_text_buffer_get_iter_at_line(console->buffer, &end_iter, scroll_top + 1);
+    // Hapus baris pertama dalam region
+    gtk_text_buffer_delete(console->buffer, &start_iter, &end_iter);
+
+    // Fill last line with space
+    gtk_text_buffer_get_iter_at_line(console->buffer, &start_iter, scroll_bottom);
+    gtk_text_buffer_insert(console->buffer, &start_iter, " \n", -1);
+    g_print("Scroll region: deleting line at %d\n", console->scroll_top);
 }
 
 /* Fungsi untuk memproses escape sequence insert line (ESC[<n>L)
@@ -180,16 +245,8 @@ static inline void process_cursor_position(Console* console, const char* seq) {
             console->x = (col > 0) ? col - 1 : 0;
             g_print("Cursor moved to row %d, column %d\n", console->y, console->x);
         }
-        else {
+        else
             g_print("Invalid cursor position sequence: %s\n", seq);
-        }
-
-        //Make sure the line in buffer is ready to use
-        while (gtk_text_buffer_get_line_count(console->buffer) <= console->y) {
-            GtkTextIter end_iter;
-            gtk_text_buffer_get_end_iter(console->buffer, &end_iter);
-            gtk_text_buffer_insert(console->buffer, &end_iter, " \n", -1);
-        }
     }
     else if(seq != NULL && strlen(seq) == 0) {
         console->y = 0;
@@ -197,6 +254,12 @@ static inline void process_cursor_position(Console* console, const char* seq) {
         g_print("Cursor moved to row %d, column %d\n", console->y, console->x);
     }
 
+    //Make sure the line in buffer is ready to use
+    while (gtk_text_buffer_get_line_count(console->buffer) <= console->y) {
+        GtkTextIter end_iter;
+        gtk_text_buffer_get_end_iter(console->buffer, &end_iter);
+        gtk_text_buffer_insert(console->buffer, &end_iter, " \n", -1);
+    }
     // Pastikan kolom (console->x) sudah ada pada baris yang dituju
     GtkTextIter line_start, line_end;
     gtk_text_buffer_get_iter_at_line(console->buffer, &line_start, console->y);
@@ -216,7 +279,7 @@ static inline void process_cursor_position(Console* console, const char* seq) {
     }
 }
 
-static inline void process_cursor_forward(Console* console, const char* seq) {
+static inline void process_cursor_right(Console* console, const char* seq) {
     int n = 1;  // Default: geser kursor ke kanan sebanyak 1 posisi.
     if (seq != NULL && strlen(seq) > 0) {
         n = atoi(seq);
@@ -225,7 +288,7 @@ static inline void process_cursor_forward(Console* console, const char* seq) {
         }
     }
     console->x += n;
-    g_print("Cursor moved forward by %d positions, new column %d\n", n, console->x);
+    g_print("Cursor moved right by %d positions, new column %d\n", n, console->x);
 
     // Pastikan baris yang sedang aktif memiliki panjang yang cukup.
     GtkTextIter line_start, line_end;
@@ -242,6 +305,23 @@ static inline void process_cursor_forward(Console* console, const char* seq) {
         gtk_text_buffer_insert(console->buffer, &line_end, " ", -1);
         line_length++;
     }
+}
+
+// Fungsi untuk memproses escape sequence cursor up (ESC[<n>A)
+// Jika parameter kosong, default adalah 1 baris.
+static inline void process_cursor_up(Console* console, const char* seq) {
+    int n = 1;  // Default: pindah ke atas 1 baris
+    if (seq != NULL && strlen(seq) > 0) {
+        n = atoi(seq);
+        if (n <= 0) {
+            n = 1;
+        }
+    }
+    console->y -= n;
+    console->x  = 0;
+    if (console->y < 0)
+        console->y = 0;
+    g_print("Cursor moved up by %d line(s), new row: %d\n", n, console->y);
 }
 
 /* Fungsi untuk memproses escape sequence SGR (Select Graphic Rendition) untuk pewarnaan teks. */
@@ -353,10 +433,6 @@ static inline void process_erase_line(Console* console, const char* seq) {
             GtkTextIter end_line_offset_iter = start_line_offset_iter;
             gtk_text_iter_forward_to_line_end(&end_line_offset_iter);
             gtk_text_buffer_delete(console->buffer, &start_line_offset_iter, &end_line_offset_iter);
-
-            gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
-            gtk_text_buffer_insert(console->buffer, &iter, " ", -1);
-            g_print("Erase from cursor to end of line.\n");
             break;
         }
         case 1: {
