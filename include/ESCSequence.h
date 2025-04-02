@@ -111,15 +111,15 @@ static inline void process_delete(Console* console, const char* seq) {
 static inline void scroll_region(Console *console, int scroll_top, int scroll_bottom) {
     GtkTextIter start_iter, end_iter;
     // Dapatkan iterator pada awal baris scroll_top
-    gtk_text_buffer_get_iter_at_line(console->buffer, &start_iter, scroll_top);
+    get_line(console, &start_iter, scroll_top);
     // Dapatkan iterator pada awal baris berikutnya
-    gtk_text_buffer_get_iter_at_line(console->buffer, &end_iter, scroll_top + 1);
+    get_line(console, &end_iter, scroll_top + 1);
     // Hapus baris pertama dalam region
     gtk_text_buffer_delete(console->buffer, &start_iter, &end_iter);
 
     // Fill last line with space
-    gtk_text_buffer_get_iter_at_line(console->buffer, &start_iter, scroll_bottom);
-    gtk_text_buffer_insert(console->buffer, &start_iter, " \n", -1);
+    get_line(console, &start_iter, scroll_bottom);
+    gtk_text_buffer_insert(console->buffer, &start_iter, "\n", -1);
     g_print("Scroll region: deleting line at %d\n", console->scroll_top);
 }
 
@@ -140,16 +140,16 @@ static inline void process_insert_line(Console* console, const char* seq) {
         GtkTextIter start_iter, end_iter;
         // Hapus baris terakhir
         // Dapatkan iterator pada awal baris scroll_top
-        gtk_text_buffer_get_iter_at_line(console->buffer, &start_iter, console->scroll_bottom);
+        get_line(console, &start_iter, console->scroll_bottom);
         // Dapatkan iterator pada awal baris berikutnya
-        gtk_text_buffer_get_iter_at_line(console->buffer, &end_iter, console->scroll_bottom + 1);
+        get_line(console, &end_iter, console->scroll_bottom + 1);
         // Hapus baris pertama dalam region
         gtk_text_buffer_delete(console->buffer, &start_iter, &end_iter);
 
         // Dapatkan iterator pada awal baris saat ini
-        gtk_text_buffer_get_iter_at_line(console->buffer, &iter, console->y);
+        get_line(console, &iter, console->y);
         // Sisipkan newline, yang akan mendorong baris di bawah ke bawah.
-        gtk_text_buffer_insert(console->buffer, &iter, " \n", -1);
+        gtk_text_buffer_insert(console->buffer, &iter, "\n", -1);
     }
     g_print("Inserted %d line(s) at row %d.\n", n, console->y);
 }
@@ -253,30 +253,6 @@ static inline void process_cursor_position(Console* console, const char* seq) {
         console->x = 0;
         g_print("Cursor moved to row %d, column %d\n", console->y, console->x);
     }
-
-    //Make sure the line in buffer is ready to use
-    while (gtk_text_buffer_get_line_count(console->buffer) <= console->y) {
-        GtkTextIter end_iter;
-        gtk_text_buffer_get_end_iter(console->buffer, &end_iter);
-        gtk_text_buffer_insert(console->buffer, &end_iter, " \n", -1);
-    }
-    // Pastikan kolom (console->x) sudah ada pada baris yang dituju
-    GtkTextIter line_start, line_end;
-    gtk_text_buffer_get_iter_at_line(console->buffer, &line_start, console->y);
-    line_end = line_start;
-    gtk_text_iter_forward_to_line_end(&line_end);
-
-    // Hitung panjang baris saat ini
-    gchar *line_text = gtk_text_buffer_get_text(console->buffer, &line_start, &line_end, FALSE);
-    int line_length = strlen(line_text);
-    g_free(line_text);
-
-    // Jika panjang baris kurang dari posisi kolom yang diinginkan,
-    // langsung sisipkan spasi satu per satu
-    while (line_length <= console->x) {
-       gtk_text_buffer_insert(console->buffer, &line_end, " ", -1);
-       line_length++;
-    }
 }
 
 static inline void process_cursor_right(Console* console, const char* seq) {
@@ -289,22 +265,6 @@ static inline void process_cursor_right(Console* console, const char* seq) {
     }
     console->x += n;
     g_print("Cursor moved right by %d positions, new column %d\n", n, console->x);
-
-    // Pastikan baris yang sedang aktif memiliki panjang yang cukup.
-    GtkTextIter line_start, line_end;
-    gtk_text_buffer_get_iter_at_line(console->buffer, &line_start, console->y);
-    line_end = line_start;
-    gtk_text_iter_forward_to_line_end(&line_end);
-
-    gchar *line_text = gtk_text_buffer_get_text(console->buffer, &line_start, &line_end, FALSE);
-    int line_length = strlen(line_text);
-    g_free(line_text);
-
-    // Jika panjang baris kurang dari posisi kolom yang diinginkan, sisipkan spasi.
-    while (line_length <= console->x) {
-        gtk_text_buffer_insert(console->buffer, &line_end, " ", -1);
-        line_length++;
-    }
 }
 
 // Fungsi untuk memproses escape sequence cursor up (ESC[<n>A)
@@ -409,7 +369,7 @@ static inline void process_erase_line(Console* console, const char* seq) {
     // if (line_count > 0) {
     //     GtkTextIter start_iter, end_iter;
     //     // Dapatkan iterator di awal baris terakhir (indeks: line_count - 1)
-    //     gtk_text_buffer_get_iter_at_line(console->buffer, &start_iter, line_count - 1);
+    //     get_line(console, &start_iter, line_count - 1);
     //     // Salin iterator awal ke end_iter
     //     end_iter = start_iter;
     //     // Gerakkan end_iter ke akhir baris
@@ -423,7 +383,7 @@ static inline void process_erase_line(Console* console, const char* seq) {
     // }
 
     GtkTextIter iter;
-    gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+    get_line_offset(console, &iter, console->y, console->x);
 
     g_print("Console Y : %d , Console X : %d ",console->y , console->x);
     switch (param) {

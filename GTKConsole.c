@@ -148,7 +148,7 @@ static GtkTextTag* get_current_tag(Console* console) {
 /* Fungsi untuk mengecek apakah kursor terlihat pada GtkTextView */
 gboolean is_cursor_visible(GtkTextView *text_view, Console* console) {
     GtkTextIter iter;
-    gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+    get_line_offset(console, &iter, console->y, console->x);
 
     /* Dapatkan lokasi kursor dalam koordinat widget */
     GdkRectangle cursor_rect;
@@ -172,7 +172,7 @@ gboolean is_cursor_visible(GtkTextView *text_view, Console* console) {
 
 void scroll_to_cursor(Console* console) {
    GtkTextIter iter;
-   gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+   get_line_offset(console, &iter, console->y, console->x > console->console_max_cols-1 ? console->console_max_cols-1 : console->x);
    gtk_text_buffer_place_cursor(console->buffer, &iter);
 
    // Gunakan mark "insert" dan scroll agar mark tersebut terlihat
@@ -185,29 +185,24 @@ void scroll_to_cursor(Console* console) {
 static gboolean console_on_key_press(GtkWidget* widget, GdkEventKey* event, gpointer user_data) {
     Console* console = (Console*)user_data;
 
-    if (event->keyval == GDK_KEY_Left) {
+    if (event->keyval == GDK_KEY_Left)
         write(console->pty->master, "\33[D", 3);
-    }
-    else if (event->keyval == GDK_KEY_Right) {
+    else if (event->keyval == GDK_KEY_Right)
         write(console->pty->master, "\33[C", 3);
-    }
-    else if (event->keyval == GDK_KEY_Up) {
+    else if (event->keyval == GDK_KEY_Up)
         write(console->pty->master, "\33[A", 3);
-    }
-    else if (event->keyval == GDK_KEY_Down) {
+    else if (event->keyval == GDK_KEY_Down)
         write(console->pty->master, "\33[B", 3);
-    }
-    else if ((event->state & GDK_CONTROL_MASK) && (event->keyval == GDK_KEY_c)) {
+    else if ((event->state & GDK_CONTROL_MASK) && (event->keyval == GDK_KEY_c))
         write(console->pty->master, "\03", 1);
-    }
-    else if (event->keyval == GDK_KEY_Return) {
+    else if (event->keyval == GDK_KEY_Return)
         write(console->pty->master, "\n", 1);
-    }
+    else if (event->keyval == GDK_KEY_Delete)
+        write(console->pty->master, "\33[3~", 4);
     else if (event->string && strlen(event->string) > 0) {
         size_t len = strlen(event->string);
-        for (size_t i = 0; i < len; i++) {
+        for (size_t i = 0; i < len; i++)
             write(console->pty->master, &(event->string[i]), 1);
-        }
     }
     scroll_to_cursor(console);
     return TRUE;
@@ -215,7 +210,7 @@ static gboolean console_on_key_press(GtkWidget* widget, GdkEventKey* event, gpoi
 
 void delete_with_cursor_position(Console *console) {
       GtkTextIter iter, end_iter;
-      gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+      get_line_offset(console, &iter, console->y, console->x);
       end_iter = iter;
       gtk_text_iter_forward_char(&end_iter);
 
@@ -239,7 +234,7 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
 
             GtkTextIter iter;
             // Dapatkan iter dengan koordinat (console->y , console->x)
-            gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+            get_line_offset(console, &iter, console->y, console->x);
 
             // Proses seluruh batch data tanpa memanggil update scroll tiap karakter.
             for (gsize i = 0; i < bytes_read; i++) {
@@ -247,16 +242,15 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
 
                 if (filter_escape_char(console, buf[i]) == -1) {
                      // Update iter
-                     gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+                     get_line_offset(console, &iter, console->y, console->x);
                      continue;
                 }
                 else if (buf[i] == 0x08) {                                          // Backspace
                     console->x--;
-                    if(console->x < 0) {
+                    if(console->x < 0)
                        console->x = 0;
-                    }
                     // Update iter
-                    gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+                    get_line_offset(console, &iter, console->y, console->x);
                 }
                 else if (buf[i] == '\n') {                                          // Line Feed = 0x0A
                     console->y++;
@@ -273,76 +267,39 @@ static gboolean pty_channel_callback(GIOChannel *source, GIOCondition condition,
                        // Contoh: jika jumlah baris buffer kurang dari scroll_bottom, tambahkan baris kosong.
                     }
 
-                    //Check The Line First
-                    int current_line_count = gtk_text_buffer_get_line_count(console->buffer);
-                    if (current_line_count == console->y) {
-                        GtkTextIter end_iter;
-                        gtk_text_buffer_get_end_iter(console->buffer, &end_iter);
-                        gtk_text_buffer_insert(console->buffer, &end_iter, " \n", -1);
-                    }
-                    gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+                    get_line_offset(console, &iter, console->y, console->x);
                 }
                 else if (buf[i] == '\r') {                                          // Cariage Return = 0x0D
                     console->x = 0;
-                    gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+                    get_line_offset(console, &iter, console->y, console->x);
                 }
                 else if (isprint(buf[i])) {
                     char input[2] = { buf[i], '\0' };
                     if (console->x == console->console_max_cols) {
                        console->x = 0;
                        console->y++;
-                       //Check The Line First
-                       int current_line_count = gtk_text_buffer_get_line_count(console->buffer);
-                       if (current_line_count == console->y) {
-                           GtkTextIter end_iter;
-                           gtk_text_buffer_get_end_iter(console->buffer, &end_iter);
-                           gtk_text_buffer_insert(console->buffer, &end_iter, " \n", -1);
-                       }
-                       gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
-                    }
 
+                       get_line_offset(console, &iter, console->y, console->x);
+                    }
                     // Insert Mode
                     // GtkTextTag* tag = get_current_tag(console);
                     // gtk_text_buffer_insert_with_tags(console->buffer, &iter, input, -1, tag, NULL);
 
                     // Replace mode
                     GtkTextIter iter;
-                    gtk_text_buffer_get_iter_at_line(console->buffer, &iter, console->y);
-
-                    // char *last_line = gtk_text_buffer_get_text(console->buffer, &iter, &end_iter, FALSE);
-                    // g_print("Console Y = %d : Console X = %d : %s : Length=%ld \n",console->y, console->x,last_line,strlen(last_line));
-                    // g_free(last_line);
+                    get_line(console, &iter, console->y);
 
                     // Hapus karakter yang ada di posisi tersebut (jika ada)
                     if (gtk_text_iter_ends_line(&iter) == FALSE)
                         delete_with_cursor_position(console);
 
-                    gtk_text_buffer_get_iter_at_line_offset(console->buffer, &iter, console->y, console->x);
+                    get_line_offset(console, &iter, console->y, console->x);
                     // Sisipkan karakter baru dengan tag yang sesuai
                     GtkTextTag* tag = get_current_tag(console);
                     gtk_text_buffer_insert_with_tags(console->buffer, &iter, input, -1, tag, NULL);
 
                     // Update posisi kursor di struktur Console
                     console->x++;
-
-                    // Pastikan kolom (console->x) sudah ada pada baris yang dituju
-                    GtkTextIter line_start, line_end;
-                    gtk_text_buffer_get_iter_at_line(console->buffer, &line_start, console->y);
-                    line_end = line_start;
-                    gtk_text_iter_forward_to_line_end(&line_end);
-
-                    // Hitung panjang baris saat ini
-                    gchar *line_text = gtk_text_buffer_get_text(console->buffer, &line_start, &line_end, FALSE);
-                    int line_length = strlen(line_text);
-                    g_free(line_text);
-
-                    // Jika panjang baris kurang dari posisi kolom yang diinginkan,
-                    // langsung sisipkan spasi satu per satu
-                    while (line_length <= console->x) {
-                        gtk_text_buffer_insert(console->buffer, &line_end, " ", -1);
-                        line_length++;
-                    }
-
                 }
             }
 
