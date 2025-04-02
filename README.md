@@ -32,8 +32,11 @@ Below are some example screenshots of MyTerminalEmulator in action:
 ### Terminal Interface
 ![Terminal Interface Screenshot](screenshots/terminal.png)
 
-### Dynamic Resizing
-![Dynamic Resizing Screenshot](screenshots/resizing.png)
+### Terminal Running VIM
+![Terminal Running VIM](screenshots/vim.png)
+
+### Terminal Running TOP
+![Terminal Running TOP](screenshots/top.png)
 
 *(Replace these image paths with your actual screenshot file paths.)*
 
