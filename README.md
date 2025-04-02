@@ -38,8 +38,6 @@ Below are some example screenshots of MyTerminalEmulator in action:
 ### Terminal Running TOP
 ![Terminal Running TOP](screenshots/top.png)
 
-*(Replace these image paths with your actual screenshot file paths.)*
-
 ---
 
 ## System Requirements ⚙️
